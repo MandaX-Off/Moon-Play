@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Premium Dashboard Pro</title>
+    <title>Moon Play</title>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <style>
         :root {
@@ -27,7 +27,6 @@
             box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.05);
         }
 
-        /* Sidebar */
         .sidebar { 
             width: 260px; background: var(--sidebar-bg); display: none; 
             flex-direction: column; padding: 35px 20px; border-right: 1px solid rgba(255,255,255,0.05);
@@ -41,7 +40,6 @@
         .user-info h4 { margin: 0; font-size: 1.1rem; color: #fff; }
         .user-info span { font-size: 0.7rem; color: var(--primary); font-weight: 800; letter-spacing: 1px; text-transform: uppercase; display: block; margin-bottom: 10px; }
 
-        /* Sistema de Niveles UI */
         .level-container { background: rgba(0,0,0,0.2); padding: 12px; border-radius: 12px; margin-top: 10px; }
         .level-info { display: flex; justify-content: space-between; font-size: 0.75rem; margin-bottom: 6px; font-weight: 600; }
         .progress-bg { width: 100%; height: 8px; background: #334155; border-radius: 10px; overflow: hidden; }
@@ -69,26 +67,27 @@
         }
         button:disabled { opacity: 0.5; cursor: not-allowed; }
 
-        /* Modales */
         .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); backdrop-filter: blur(10px); justify-content: center; align-items: center; z-index: 1000; }
         .modal-content { background: var(--card-bg); padding: 35px; border-radius: 24px; width: 400px; border: 1px solid rgba(255,255,255,0.1); box-shadow: 0 20px 25px -5px rgba(0,0,0,0.5); }
         .btn-cancel { background: transparent; color: var(--text-muted); border: 1px solid #334155; margin-top: 10px; }
         .btn-cancel:hover { background: rgba(255,255,255,0.05); color: white; }
 
-        /* Estilos Leaderboard */
         .leaderboard-list { max-height: 300px; overflow-y: auto; margin-top: 15px; padding-right: 5px; }
         .leaderboard-item { display: flex; justify-content: space-between; align-items: center; padding: 10px; border-bottom: 1px solid rgba(255,255,255,0.05); font-size: 0.9rem; }
-        .leaderboard-item:last-child { border-bottom: none; }
         .rank-number { font-weight: 800; color: var(--primary); width: 30px; }
         .rank-name { flex-grow: 1; margin-left: 10px; }
         .rank-xp { font-weight: 600; color: var(--text-muted); font-size: 0.8rem; }
-        .leaderboard-list::-webkit-scrollbar { width: 5px; }
-        .leaderboard-list::-webkit-scrollbar-thumb { background: #334155; border-radius: 10px; }
 
-        /* Misiones */
         .mission-card { background: rgba(0,0,0,0.2); padding: 15px; border-radius: 15px; margin-bottom: 15px; border: 1px solid rgba(255,255,255,0.05); }
         .mission-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
         .mission-timer { font-size: 0.75rem; color: var(--primary); font-weight: 700; }
+
+        .inventory-section { margin-bottom: 20px; text-align: left; }
+        .inventory-section h4 { font-size: 0.85rem; color: var(--primary); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 10px; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 5px; }
+        .inventory-empty { font-size: 0.75rem; color: var(--text-muted); padding: 10px 0; font-style: italic; }
+
+        .color-dot { width: 35px; height: 35px; border-radius: 50%; cursor: pointer; border: 2px solid white; transition: transform 0.2s; }
+        .color-dot:hover { transform: scale(1.1); }
 
         #toast-container { position: fixed; bottom: 30px; right: 30px; z-index: 9999; }
         .toast { background: #1e293b; color: white; padding: 16px 24px; border-radius: 12px; margin-top: 10px; border-left: 4px solid var(--primary); animation: slideIn 0.3s forwards; }
@@ -127,6 +126,7 @@
                 <div class="nav-item" id="btn-open-codes">🎁 Canjear Codes</div>
                 <div class="nav-item" id="btn-open-leaderboard">🏆 Clasificación</div>
                 <div class="nav-item" id="btn-open-missions">📅 Misiones Diarias</div>
+                <div class="nav-item" id="btn-open-inventory">🎒 Inventario</div>
             </nav>
 
             <div class="nav-item" id="btn-logout-side" style="color: var(--error);">🚪 Cerrar Sesión</div>
@@ -156,10 +156,37 @@
         </div>
     </div>
 
+    <div id="inventory-modal" class="modal">
+        <div class="modal-content">
+            <h3>Tu Inventario</h3>
+            <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom:20px;">Gestiona tus cosméticos y objetos.</p>
+            
+            <div id="inventory-container">
+                <div class="inventory-section">
+                    <h4>Color de Name</h4>
+                    <div id="colores-poseidos" style="display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px;">
+                        <div class="inventory-empty">No tienes colores desbloqueados.</div>
+                    </div>
+                </div>
+
+                <div class="inventory-section">
+                    <h4>Marco</h4>
+                    <div class="inventory-empty">No tienes marcos desbloqueados.</div>
+                </div>
+
+                <div class="inventory-section">
+                    <h4>Objetos / Otros</h4>
+                    <div class="inventory-empty">Tu baúl está vacío.</div>
+                </div>
+            </div>
+
+            <button id="btn-close-inventory" class="btn-cancel">Cerrar</button>
+        </div>
+    </div>
+
     <div id="settings-modal" class="modal">
         <div class="modal-content">
             <h3>Configuración</h3>
-            <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:15px;">Actualiza tus datos de acceso.</p>
             <input type="text" id="new-username" placeholder="Nombre">
             <input type="password" id="new-password" placeholder="Nueva Contraseña (Opcional)">
             <button id="btn-update">Guardar Cambios</button>
@@ -170,7 +197,6 @@
     <div id="codes-modal" class="modal">
         <div class="modal-content">
             <h3>Canjear Código</h3>
-            <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom:15px;">Introduce tu código promocional.</p>
             <input type="text" id="input-code" placeholder="Ej: PROMO2024" style="text-transform: uppercase;">
             <button id="btn-redeem-code">Canjear Ahora</button>
             <button id="btn-close-codes" class="btn-cancel">Cancelar</button>
@@ -180,7 +206,6 @@
     <div id="leaderboard-modal" class="modal">
         <div class="modal-content">
             <h3>Top Clasificación</h3>
-            <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom:15px;">Los 100 usuarios con mayor nivel.</p>
             <div id="leaderboard-list" class="leaderboard-list"></div>
             <button id="btn-close-leaderboard" class="btn-cancel">Cerrar</button>
         </div>
@@ -189,8 +214,6 @@
     <div id="missions-modal" class="modal">
         <div class="modal-content">
             <h3>Misiones Diarias</h3>
-            <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom:20px;">Reclama tu XP gratuita periódicamente.</p>
-            
             <div class="mission-card">
                 <div class="mission-header">
                     <span>Misión Express (+10 XP)</span>
@@ -198,7 +221,6 @@
                 </div>
                 <button id="btn-claim-12h">Reclamar</button>
             </div>
-
             <div class="mission-card">
                 <div class="mission-header">
                     <span>Misión Diaria (+15 XP)</span>
@@ -206,7 +228,6 @@
                 </div>
                 <button id="btn-claim-24h">Reclamar</button>
             </div>
-
             <button id="btn-close-missions" class="btn-cancel">Cerrar</button>
         </div>
     </div>
