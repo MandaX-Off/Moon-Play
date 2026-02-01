@@ -8,6 +8,7 @@ const _supabase = supabase.createClient(CONFIG.URL, CONFIG.ANON_KEY);
 
 let currentUser = null;
 let isLoginMode = true;
+let timerInterval = null;
 
 // --- UTILS ---
 function notify(text, isError = false) {
@@ -39,26 +40,23 @@ function toggleLoading(btnId, isLoading) {
 
 function cerrarModales() {
     document.querySelectorAll('.modal').forEach(m => m.style.display = 'none');
+    if (timerInterval) clearInterval(timerInterval);
 }
 
-// --- SISTEMA DE NIVELES (Optimizado con Matemáticas) ---
-// Fórmula: XP necesaria para nivel N = N * 100
+// --- SISTEMA DE NIVELES ---
 function obtenerProgreso(totalXP) {
-    // Usamos la fórmula de progresión aritmética simplificada
-    // Nivel = (sqrt(200 * XP + 2500) + 50) / 100 -> Para escalas complejas
-    // Para tu escala simple de nivel * 100:
     let nivel = 1;
-    let xpAcumulada = 0;
+    let tempXP = totalXP;
     
-    while (totalXP >= (nivel * 100)) {
-        totalXP -= (nivel * 100);
+    while (tempXP >= (nivel * 100)) {
+        tempXP -= (nivel * 100);
         nivel++;
     }
 
     const xpNecesaria = nivel * 100;
-    const porcentaje = (totalXP / xpNecesaria) * 100;
+    const porcentaje = (tempXP / xpNecesaria) * 100;
 
-    return { nivel, xpRestante: totalXP, xpNecesaria, porcentaje };
+    return { nivel, xpRestante: tempXP, xpNecesaria, porcentaje };
 }
 
 function actualizarUINiveles(xp) {
@@ -79,7 +77,6 @@ async function refrescarDatosUsuario() {
     if (!currentUser) return;
     const { data, error } = await _supabase.from('usuarios').select('*').eq('id', currentUser.id).single();
     if (!error && data) {
-        // IMPORTANTE: Borramos el password antes de guardar en LocalStorage por seguridad
         delete data.password; 
         currentUser = data;
         localStorage.setItem('supabase_user', JSON.stringify(data));
@@ -99,10 +96,107 @@ async function sumarXP(cantidad, mensajeExito) {
     if (!error) {
         await refrescarDatosUsuario();
         notify(mensajeExito);
-        cerrarModales();
     } else {
         notify("Error al actualizar XP: " + error.message, true);
     }
+}
+
+// --- MISIONES Y CONTADORES ---
+function actualizarContadores() {
+    const ahora = new Date().getTime();
+    
+    // Misión 12h
+    const last12 = currentUser.ultimo_12h ? new Date(currentUser.ultimo_12h).getTime() : 0;
+    const diff12 = (12 * 60 * 60 * 1000) - (ahora - last12);
+    const btn12 = document.getElementById('btn-claim-12h');
+    const txt12 = document.getElementById('timer-12h');
+
+    if (diff12 > 0) {
+        btn12.disabled = true;
+        txt12.innerText = formatTime(diff12);
+    } else {
+        btn12.disabled = false;
+        txt12.innerText = "LISTO";
+    }
+
+    // Misión 24h
+    const last24 = currentUser.ultimo_checkin ? new Date(currentUser.ultimo_checkin).getTime() : 0;
+    const diff24 = (24 * 60 * 60 * 1000) - (ahora - last24);
+    const btn24 = document.getElementById('btn-claim-24h');
+    const txt24 = document.getElementById('timer-24h');
+
+    if (diff24 > 0) {
+        btn24.disabled = true;
+        txt24.innerText = formatTime(diff24);
+    } else {
+        btn24.disabled = false;
+        txt24.innerText = "LISTO";
+    }
+}
+
+function formatTime(ms) {
+    const h = Math.floor(ms / 3600000);
+    const m = Math.floor((ms % 3600000) / 60000);
+    const s = Math.floor((ms % 60000) / 1000);
+    return `${h}h ${m}m ${s}s`;
+}
+
+async function reclamarMision(tipo) {
+    const btnId = tipo === 12 ? 'btn-claim-12h' : 'btn-claim-24h';
+    const xp = tipo === 12 ? 10 : 15;
+    const column = tipo === 12 ? 'ultimo_12h' : 'ultimo_checkin';
+    const ahora = new Date().toISOString();
+
+    toggleLoading(btnId, true);
+
+    const { error } = await _supabase
+        .from('usuarios')
+        .update({ [column]: ahora })
+        .eq('id', currentUser.id);
+
+    if (!error) {
+        await sumarXP(xp, `¡Misión completada! +${xp} XP`);
+        actualizarContadores();
+    } else {
+        notify("Error: " + error.message, true);
+    }
+    toggleLoading(btnId, false);
+}
+
+// --- CLASIFICACIÓN (LEADERBOARD) ---
+async function cargarLeaderboard() {
+    const listContainer = document.getElementById('leaderboard-list');
+    listContainer.innerHTML = "<p style='text-align:center; font-size:0.8rem;'>Cargando tops...</p>";
+    
+    const { data, error } = await _supabase
+        .from('usuarios')
+        .select('usuario, xp')
+        .gt('xp', 0)
+        .order('xp', { ascending: false })
+        .limit(100);
+
+    if (error) {
+        listContainer.innerHTML = "<p style='color:var(--error); font-size:0.8rem;'>Error al cargar el ranking</p>";
+        return;
+    }
+
+    if (data.length === 0) {
+        listContainer.innerHTML = "<p style='text-align:center; font-size:0.8rem; color:var(--text-muted);'>Aún no hay nadie con XP.</p>";
+        return;
+    }
+
+    listContainer.innerHTML = "";
+    data.forEach((user, index) => {
+        const info = obtenerProgreso(user.xp);
+        const item = document.createElement('div');
+        item.className = 'leaderboard-item';
+        item.innerHTML = `
+            <span class="rank-number">#${index + 1}</span>
+            <span class="rank-name">${user.usuario}</span>
+            <span class="rank-xp">Nivel ${info.nivel} (${user.xp} XP)</span>
+        `;
+        listContainer.appendChild(item);
+    });
 }
 
 // --- DASHBOARD ---
@@ -123,7 +217,6 @@ function renderDashboard(user) {
     const avatar = document.getElementById('avatar-circle');
     const adminP = document.getElementById('admin-panel');
 
-    // Reset styles
     rankLbl.classList.remove('owner-style');
     avatar.classList.remove('owner-style');
     adminP.classList.add('hidden');
@@ -141,7 +234,6 @@ function renderDashboard(user) {
     if (saved) {
         currentUser = JSON.parse(saved);
         renderDashboard(currentUser);
-        // Segundo plano: verificar si los datos cambiaron en la DB
         refrescarDatosUsuario();
     }
 })();
@@ -170,7 +262,7 @@ document.getElementById('btn-main').onclick = async () => {
 
             if (error) throw error;
             if (data) {
-                delete data.password; // Seguridad
+                delete data.password;
                 localStorage.setItem('supabase_user', JSON.stringify(data));
                 renderDashboard(data);
                 notify("¡Hola de nuevo!");
@@ -207,8 +299,23 @@ document.getElementById('btn-open-codes').onclick = () => {
     document.getElementById('input-code').value = "";
     document.getElementById('codes-modal').style.display = 'flex';
 };
+document.getElementById('btn-open-leaderboard').onclick = () => {
+    document.getElementById('leaderboard-modal').style.display = 'flex';
+    cargarLeaderboard();
+};
+document.getElementById('btn-open-missions').onclick = () => {
+    document.getElementById('missions-modal').style.display = 'flex';
+    actualizarContadores();
+    timerInterval = setInterval(actualizarContadores, 1000);
+};
+
 document.getElementById('btn-close-settings').onclick = cerrarModales;
 document.getElementById('btn-close-codes').onclick = cerrarModales;
+document.getElementById('btn-close-leaderboard').onclick = cerrarModales;
+document.getElementById('btn-close-missions').onclick = cerrarModales;
+
+document.getElementById('btn-claim-12h').onclick = () => reclamarMision(12);
+document.getElementById('btn-claim-24h').onclick = () => reclamarMision(24);
 
 document.getElementById('btn-update').onclick = async () => {
     const nuevoU = document.getElementById('new-username').value.trim();
@@ -241,20 +348,18 @@ document.getElementById('btn-redeem-code').onclick = async () => {
     toggleLoading('btn-redeem-code', true);
 
     try {
-        // 1. Verificar existencia
         const { data: codigo, error: e1 } = await _supabase.from('codigos').select('*').eq('codigo', input).maybeSingle();
         if (e1 || !codigo) throw new Error("Ese código no existe");
 
-        // 2. Verificar si ya se usó
         const { data: usado, error: e2 } = await _supabase.from('codigos_usados')
             .select('*').eq('usuario_id', currentUser.id).eq('codigo_id', codigo.id).maybeSingle();
         if (usado) throw new Error("Ya usaste este código");
 
-        // 3. Registrar uso y sumar XP
         const { error: e3 } = await _supabase.from('codigos_usados').insert([{ usuario_id: currentUser.id, codigo_id: codigo.id }]);
         if (e3) throw e3;
 
         await sumarXP(codigo.xp_reward, `¡Canjeado! +${codigo.xp_reward} XP`);
+        cerrarModales();
     } catch (err) {
         notify(err.message, true);
     } finally {
