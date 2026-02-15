@@ -13,7 +13,48 @@ if (!CONFIG.ANON_KEY || CONFIG.ANON_KEY.length < 20) {
 
 const _supabase = supabase.createClient(CONFIG.URL, CONFIG.ANON_KEY);
 
+// 🔒 DETECCIÓN ROBUSTA DE BCRYPTJS
+let hasher = null;
+let bcryptLoadAttempts = 0;
+const MAX_BCRYPT_ATTEMPTS = 10;
+
+async function waitForBcrypt() {
+    return new Promise((resolve, reject) => {
+        const checkInterval = setInterval(() => {
+            if (window.dcodeIO && window.dcodeIO.bcrypt) {
+                hasher = window.dcodeIO.bcrypt;
+                clearInterval(checkInterval);
+                console.log("✅ bcryptjs cargado correctamente");
+                resolve(true);
+            } else if (window.bcrypt) {
+                hasher = window.bcrypt;
+                clearInterval(checkInterval);
+                console.log("✅ bcryptjs cargado correctamente");
+                resolve(true);
+            } else {
+                bcryptLoadAttempts++;
+                if (bcryptLoadAttempts >= MAX_BCRYPT_ATTEMPTS) {
+                    clearInterval(checkInterval);
+                    console.error("❌ No se pudo cargar bcryptjs después de múltiples intentos");
+                    reject(new Error("No se pudo cargar la librería de encriptación"));
+                }
+            }
+        }, 100);
+    });
+}
+
+// Inicializar bcryptjs al cargar
+(async function initBcrypt() {
+    try {
+        await waitForBcrypt();
+    } catch (error) {
+        console.error("Error crítico:", error);
+        alert("Error al cargar el sistema de seguridad. Por favor, recarga la página.");
+    }
+})();
+
 let currentUser = null;
+let u = null; // Variable global para compatibilidad con UI
 let isLoginMode = true;
 let timerInterval = null;
 
@@ -61,10 +102,10 @@ function toggleLoading(btnId, isLoading) {
 function cerrarModales() {
     document.querySelectorAll('.modal').forEach(m => {
         m.style.opacity = '0'; 
-        m.style.transform = 'scale(1.05)'; // Efecto de salida suave
+        m.style.transform = 'scale(1.05)';
         setTimeout(() => {
             m.style.display = 'none';
-            m.style.transform = ''; // Reset
+            m.style.transform = '';
         }, 200);
     });
     if (timerInterval) {
@@ -74,7 +115,6 @@ function cerrarModales() {
 }
 
 function validarUsername(username) {
-    // Solo letras, números y guiones bajos, sin espacios.
     const regex = /^[a-zA-Z0-9_]+$/;
     return regex.test(username);
 }
@@ -85,11 +125,10 @@ function obtenerProgreso(totalXP) {
     if (tempXP < 0) tempXP = 0;
 
     let nivel = 1;
-    // Lógica segura para evitar loops infinitos
     while (tempXP >= (nivel * 100)) {
         tempXP -= (nivel * 100);
         nivel++;
-        if(nivel > 2000) break; // Break de seguridad
+        if(nivel > 2000) break;
     }
     
     const xpNecesaria = nivel * 100;
@@ -113,11 +152,18 @@ function actualizarUINiveles(xp) {
 
 // --- CORE FUNCTIONS ---
 async function refrescarDatosUsuario() {
-    if (!currentUser) return;
+    if (!currentUser || !currentUser.id) {
+        console.warn("No hay usuario actual para refrescar");
+        return;
+    }
+    
     try {
         const { data, error } = await _supabase.from('usuarios').select('*').eq('id', currentUser.id).maybeSingle();
         
-        if (error) throw error;
+        if (error) {
+            console.error("Error al refrescar datos:", error);
+            return;
+        }
         
         if (!data) {
             console.warn("Usuario no encontrado en DB, cerrando sesión.");
@@ -125,11 +171,19 @@ async function refrescarDatosUsuario() {
             return;
         }
 
-        // NO guardar password en localstorage por seguridad
+        // 🔒 SEGURIDAD: Eliminar password de memoria
         delete data.password; 
         currentUser = data;
+        u = data; // Sincronizar variable global
         localStorage.setItem('supabase_user', JSON.stringify(data));
-        renderDashboard(data);
+        
+        actualizarUINiveles(data.xp);
+        
+        const sideName = document.getElementById('side-name');
+        if (sideName) {
+            sideName.innerText = data.usuario;
+            sideName.style.color = data.color_name || '#ffffff';
+        }
         
     } catch (e) { 
         console.error("Error refresh:", e);
@@ -138,33 +192,30 @@ async function refrescarDatosUsuario() {
 
 async function sumarXP(cantidad, mensajeExito) {
     if (!currentUser) return;
-    // Optimistic UI: Sumamos visualmente antes
     const nuevaXP = (currentUser.xp || 0) + cantidad;
     actualizarUINiveles(nuevaXP);
     
     try {
-        // Usamos una llamada RPC si fuera posible, pero aquí usamos update directo
         const { error } = await _supabase.from('usuarios').update({ xp: nuevaXP }).eq('id', currentUser.id);
         if (!error) {
-            currentUser.xp = nuevaXP; // Confirmar local
+            currentUser.xp = nuevaXP;
+            u.xp = nuevaXP; // Sincronizar variable global
             notify(mensajeExito);
         } else throw error;
     } catch (e) { 
         notify("Error de conexión al guardar XP", true);
-        actualizarUINiveles(currentUser.xp); // Revertir visualmente
+        actualizarUINiveles(currentUser.xp);
     }
 }
 
 // --- INVENTARIO Y COSMÉTICOS ---
 async function equiparColor(colorHex) {
     const prevColor = currentUser.color_name;
-    // Feedback visual inmediato
     document.getElementById('side-name').style.color = colorHex;
     
-    // Actualizar clase activa en el modal
     document.querySelectorAll('.color-dot').forEach(dot => {
         dot.classList.remove('active');
-        if(dot.style.backgroundColor === colorHex) dot.classList.add('active'); // Nota: rgb vs hex puede fallar, mejor usar dataset
+        if(dot.style.backgroundColor === colorHex) dot.classList.add('active');
     });
 
     try {
@@ -172,11 +223,12 @@ async function equiparColor(colorHex) {
         if (error) throw error;
         notify("¡Color equipado con éxito!");
         currentUser.color_name = colorHex;
+        u.color_name = colorHex; // Sincronizar variable global
         refrescarDatosUsuario();
     } catch (e) { 
         document.getElementById('side-name').style.color = prevColor;
         notify("Error al equipar: " + e.message, true); 
-        cargarInventarioColores(); // Recargar para revertir selección
+        cargarInventarioColores();
     }
 }
 
@@ -195,16 +247,13 @@ async function cargarInventarioColores() {
     }
 
     container.innerHTML = "";
-    // Color por defecto (Blanco)
     const defaultColor = { color_hex: '#ffffff' };
-    // Evitar duplicados si el usuario compró blanco (poco probable pero posible)
     const dataLimpia = data || [];
     const todosLosColores = [defaultColor, ...dataLimpia];
 
     todosLosColores.forEach(item => {
         const dot = document.createElement('div');
         dot.className = "color-dot";
-        // Comparación simple (idealmente convertir ambos a lowercase)
         if ((currentUser.color_name || '#ffffff').toLowerCase() === item.color_hex.toLowerCase()) {
             dot.classList.add('active');
         }
@@ -240,15 +289,13 @@ function actualizarContadores() {
 
         if (btn && txt) {
             if (diff > 0) {
-                // En enfriamiento
                 btn.disabled = true;
                 btn.innerText = "Esperando...";
                 txt.innerText = formatTime(diff);
                 txt.classList.remove('mission-ready-text');
                 if(card) card.classList.remove('mission-ready');
             } else {
-                // Listo
-                if (btn.innerText !== "Reclamar") { // Evitar repintado innecesario
+                if (btn.innerText !== "Reclamar") {
                     btn.disabled = false;
                     btn.innerText = "Reclamar";
                     txt.innerText = "¡DISPONIBLE!";
@@ -274,18 +321,15 @@ async function reclamarMision(tipo) {
 
     const xp = tipo === 12 ? 10 : 15;
     const column = tipo === 12 ? 'ultimo_12h' : 'ultimo_checkin';
-    // Usar ISO string para asegurar compatibilidad con timestampz de Postgres
     const ahora = new Date().toISOString();
 
     toggleLoading(btnId, true);
     try {
-        // Doble verificación: comprobar timestamp en DB para evitar "doble click" rápido
         const { data: checkData } = await _supabase.from('usuarios').select(column).eq('id', currentUser.id).single();
         if(checkData) {
             const lastTime = checkData[column] ? new Date(checkData[column]).getTime() : 0;
             const hoursNeeded = tipo;
             const diff = (new Date().getTime()) - lastTime;
-            // Permitir un margen de error de 1 min por diferencias de reloj
             if (diff < (hoursNeeded * 3600000 - 60000)) {
                 throw new Error("Aún no ha pasado el tiempo suficiente.");
             }
@@ -295,10 +339,18 @@ async function reclamarMision(tipo) {
         if (!error) {
             await sumarXP(xp, `¡Misión completada! +${xp} XP`);
             currentUser[column] = ahora; 
+            u[column] = ahora; // Sincronizar variable global
             actualizarContadores();
         } else throw error;
     } catch (e) { notify(e.message, true); }
     finally { toggleLoading(btnId, false); actualizarContadores(); }
+}
+
+function showMissions() {
+    if (timerInterval) clearInterval(timerInterval);
+    openModal('missions-modal');
+    actualizarContadores();
+    timerInterval = setInterval(actualizarContadores, 1000);
 }
 
 // --- CLASIFICACIÓN ---
@@ -327,13 +379,11 @@ async function cargarLeaderboard() {
             if (index === 1) rankDisplay = '🥈';
             if (index === 2) rankDisplay = '🥉';
 
-            // Resaltar al usuario actual
             if(user.usuario === currentUser.usuario) {
                 item.style.background = 'rgba(62, 207, 142, 0.1)';
                 item.style.border = '1px solid var(--primary)';
             }
 
-            // Color del nombre (por defecto blanco si no tiene)
             const userColor = user.color_name || '#ffffff';
 
             item.innerHTML = `
@@ -342,20 +392,31 @@ async function cargarLeaderboard() {
                 <span class="rank-xp">Nivel ${info.nivel} (${user.xp.toLocaleString()} XP)</span>`;
             listContainer.appendChild(item);
         });
+        
+        // Actualizar estadística en dashboard
+        const userRank = data.findIndex(user => user.usuario === currentUser.usuario) + 1;
+        const statRank = document.getElementById('stat-rank');
+        if (statRank) {
+            statRank.innerText = userRank > 0 ? `#${userRank}` : 'N/A';
+        }
     } catch (e) { listContainer.innerHTML = "<p style='color:var(--error); text-align:center;'>Error al cargar ranking</p>"; }
 }
 
 // --- DASHBOARD & AUTH ---
 function renderDashboard(user) {
     if (!user) return;
-    currentUser = user;
     
-    document.getElementById('auth-section').classList.add('hidden');
-    document.getElementById('welcome-view').classList.remove('hidden');
+    // 🔒 SEGURIDAD: Eliminar password de objetos globales
+    delete user.password;
+    currentUser = user;
+    u = user; // Sincronizar variable global
+    
+    document.getElementById('auth-container').style.display = 'none';
+    document.getElementById('dashboard-container').classList.add('dashboard-active');
     document.getElementById('sidebar').style.display = 'flex';
     
     const sideName = document.getElementById('side-name');
-    const avatar = document.getElementById('avatar-circle');
+    const avatar = document.getElementById('avatar-icon');
     
     sideName.innerText = user.usuario;
     sideName.style.color = user.color_name || '#ffffff';
@@ -365,14 +426,24 @@ function renderDashboard(user) {
     actualizarUINiveles(user.xp);
 
     const isOwner = user.rango === 'OWNER';
-    const adminPanel = document.getElementById('admin-panel');
-    if (adminPanel) {
-        isOwner ? adminPanel.classList.remove('hidden') : adminPanel.classList.add('hidden');
+    document.getElementById('side-rank').style.color = isOwner ? 'var(--owner-color)' : 'var(--primary)';
+    
+    // Actualizar estadísticas del dashboard
+    const statColors = document.getElementById('stat-colors');
+    if (statColors) {
+        _supabase.from('inventario_colores').select('id', { count: 'exact' }).eq('usuario_id', user.id).then(({ count }) => {
+            statColors.innerText = (count || 0) + 1; // +1 por el color blanco por defecto
+        });
     }
-
-    document.getElementById('side-rank').classList.toggle('owner-style', isOwner);
-    avatar.classList.toggle('owner-style', isOwner);
-    avatar.style.borderColor = isOwner ? 'var(--owner-color)' : 'var(--primary)';
+    
+    const statMissions = document.getElementById('stat-missions');
+    if (statMissions) {
+        const ahora = new Date().getTime();
+        let activas = 0;
+        if (!user.ultimo_12h || (ahora - new Date(user.ultimo_12h).getTime()) >= 12 * 60 * 60 * 1000) activas++;
+        if (!user.ultimo_checkin || (ahora - new Date(user.ultimo_checkin).getTime()) >= 24 * 60 * 60 * 1000) activas++;
+        statMissions.innerText = activas;
+    }
 }
 
 function logout() {
@@ -380,54 +451,126 @@ function logout() {
     location.reload();
 }
 
-document.getElementById('toggle-auth').onclick = () => {
-    isLoginMode = !isLoginMode;
-    document.getElementById('form-title').innerText = isLoginMode ? "Moon Play" : "Crear Cuenta";
-    document.getElementById('btn-main').innerText = isLoginMode ? "Acceder al Panel" : "Registrarse ahora";
-};
+// --- AUTH CONTROLS ---
+const btnLoginTab = document.getElementById('btn-login-tab');
+const btnRegisterTab = document.getElementById('btn-register-tab');
+const btnAuth = document.getElementById('btn-auth');
 
-document.getElementById('btn-main').onclick = async () => {
-    const uInput = document.getElementById('username');
-    const pInput = document.getElementById('password');
-    const u = uInput.value.trim();
-    const p = pInput.value.trim();
+if (btnLoginTab && btnRegisterTab && btnAuth) {
+    btnLoginTab.onclick = () => {
+        isLoginMode = true;
+        btnAuth.innerText = "Iniciar Sesión";
+        btnLoginTab.style.background = 'var(--primary)';
+        btnLoginTab.style.color = '#0b0f1a';
+        btnRegisterTab.style.background = 'transparent';
+        btnRegisterTab.style.color = 'var(--text-muted)';
+    };
     
-    if (!u || !p) return notify("Completa todos los campos", true);
-    if (!validarUsername(u)) return notify("El usuario solo puede tener letras y números", true);
-    if (u.length < 3) return notify("El usuario es muy corto (min 3)", true);
-    
-    toggleLoading('btn-main', true);
-    try {
-        if (isLoginMode) {
-            // LOGIN
-            const { data, error } = await _supabase.from('usuarios').select('*').eq('usuario', u).eq('password', p).maybeSingle();
-            if (error) throw error;
-            if (data) {
-                notify("¡Hola de nuevo! 👋");
-                renderDashboard(data);
-                // Guardar sesión (sin password)
-                delete data.password;
-                localStorage.setItem('supabase_user', JSON.stringify(data));
-                uInput.value = "";
-                pInput.value = "";
-            } else {
-                notify("Usuario o contraseña incorrectos", true);
-            }
-        } else {
-            // REGISTRO - Check duplicados
-            const { data: exist } = await _supabase.from('usuarios').select('id').eq('usuario', u).maybeSingle();
-            if (exist) {
-                notify("¡Ese nombre de usuario ya existe!", true);
-            } else {
-                const { error } = await _supabase.from('usuarios').insert([{ usuario: u, password: p, rango: 'USUARIO', xp: 0 }]);
-                if (error) throw error;
-                notify("¡Cuenta creada! Inicia sesión ahora.");
-                document.getElementById('toggle-auth').click(); // Cambiar a modo login
-            }
+    btnRegisterTab.onclick = () => {
+        isLoginMode = false;
+        btnAuth.innerText = "Registrarse";
+        btnRegisterTab.style.background = 'var(--primary)';
+        btnRegisterTab.style.color = '#0b0f1a';
+        btnLoginTab.style.background = 'transparent';
+        btnLoginTab.style.color = 'var(--text-muted)';
+    };
+
+    btnAuth.onclick = async () => {
+        if (!hasher) {
+            notify("Sistema de seguridad no está listo. Intenta de nuevo en unos segundos.", true);
+            return;
         }
-    } catch (err) { notify("Error: " + err.message, true); } 
-    finally { toggleLoading('btn-main', false); }
-};
+        
+        const uInput = document.getElementById('input-user');
+        const pInput = document.getElementById('input-pass');
+        const usuario = uInput.value.trim();
+        const password = pInput.value.trim();
+        
+        if (!usuario || !password) return notify("Completa todos los campos", true);
+        if (!validarUsername(usuario)) return notify("El usuario solo puede tener letras y números", true);
+        if (usuario.length < 3) return notify("El usuario es muy corto (min 3)", true);
+        
+        toggleLoading('btn-auth', true);
+        try {
+            if (isLoginMode) {
+                // 🔒 LOGIN CON BCRYPT
+                const { data: userData, error: selectError } = await _supabase
+                    .from('usuarios')
+                    .select('*')
+                    .eq('usuario', usuario)
+                    .maybeSingle();
+                
+                if (selectError) throw selectError;
+                
+                if (!userData) {
+                    notify("Usuario o contraseña incorrectos", true);
+                } else {
+                    // Comparar password
+                    const passwordValida = await new Promise((resolve) => {
+                        try {
+                            const resultado = hasher.compareSync(password, userData.password);
+                            resolve(resultado);
+                        } catch (e) {
+                            console.error("Error al comparar password:", e);
+                            resolve(false);
+                        }
+                    });
+                    
+                    if (passwordValida) {
+                        // 🔒 SEGURIDAD: Eliminar password antes de guardar
+                        delete userData.password;
+                        localStorage.setItem('supabase_user', JSON.stringify(userData));
+                        
+                        notify("¡Hola de nuevo! 👋");
+                        renderDashboard(userData);
+                        uInput.value = "";
+                        pInput.value = "";
+                    } else {
+                        notify("Usuario o contraseña incorrectos", true);
+                    }
+                }
+            } else {
+                // 🔒 REGISTRO CON BCRYPT
+                const { data: exist } = await _supabase
+                    .from('usuarios')
+                    .select('id')
+                    .eq('usuario', usuario)
+                    .maybeSingle();
+                
+                if (exist) {
+                    notify("¡Ese nombre de usuario ya existe!", true);
+                } else {
+                    // Hashear contraseña
+                    const passwordHash = await new Promise((resolve, reject) => {
+                        try {
+                            const hash = hasher.hashSync(password, 10);
+                            resolve(hash);
+                        } catch (e) {
+                            reject(e);
+                        }
+                    });
+                    
+                    const { error } = await _supabase
+                        .from('usuarios')
+                        .insert([{ 
+                            usuario: usuario, 
+                            password: passwordHash, 
+                            rango: 'USUARIO', 
+                            xp: 0 
+                        }]);
+                    
+                    if (error) throw error;
+                    notify("¡Cuenta creada! Inicia sesión ahora.");
+                    btnLoginTab.click();
+                }
+            }
+        } catch (err) { 
+            notify("Error: " + err.message, true); 
+        } finally { 
+            toggleLoading('btn-auth', false); 
+        }
+    };
+}
 
 // --- MODAL EVENTS ---
 function openModal(modalId) {
@@ -436,160 +579,220 @@ function openModal(modalId) {
     modal.style.opacity = '1';
 }
 
-document.getElementById('btn-open-settings').onclick = () => {
-    document.getElementById('new-username').value = currentUser.usuario;
-    document.getElementById('new-password').value = ""; // Limpiar siempre password field
-    openModal('settings-modal');
-};
-document.getElementById('btn-open-codes').onclick = () => {
-    document.getElementById('input-code').value = "";
-    openModal('codes-modal');
-};
-document.getElementById('btn-open-leaderboard').onclick = () => {
-    openModal('leaderboard-modal');
-    cargarLeaderboard();
-};
-document.getElementById('btn-open-missions').onclick = () => {
-    if (timerInterval) clearInterval(timerInterval);
-    openModal('missions-modal');
-    actualizarContadores();
-    timerInterval = setInterval(actualizarContadores, 1000);
-};
-document.getElementById('btn-open-inventory').onclick = () => {
-    openModal('inventory-modal');
-    cargarInventarioColores();
-};
-document.getElementById('btn-open-changelog').onclick = () => {
-    openModal('changelog-modal');
-};
+// 🔒 CAMBIO DE CONTRASEÑA CON BCRYPT
+const btnChangePass = document.getElementById('btn-change-pass');
+if (btnChangePass) {
+    btnChangePass.onclick = async () => {
+        if (!hasher) {
+            notify("Sistema de seguridad no está listo. Intenta de nuevo en unos segundos.", true);
+            return;
+        }
+        
+        const oldPass = document.getElementById('input-old-pass').value.trim();
+        const newPass = document.getElementById('input-new-pass').value.trim();
+        const confirmPass = document.getElementById('input-confirm-pass').value.trim();
+        
+        if (!oldPass || !newPass || !confirmPass) {
+            return notify("Completa todos los campos", true);
+        }
+        
+        if (newPass !== confirmPass) {
+            return notify("Las contraseñas nuevas no coinciden", true);
+        }
+        
+        if (newPass.length < 4) {
+            return notify("La contraseña nueva es muy corta (mín. 4 caracteres)", true);
+        }
+        
+        toggleLoading('btn-change-pass', true);
+        
+        try {
+            // Obtener password actual de la BD
+            const { data: userData, error: fetchError } = await _supabase
+                .from('usuarios')
+                .select('password')
+                .eq('id', currentUser.id)
+                .single();
+            
+            if (fetchError) throw fetchError;
+            
+            // Verificar contraseña actual
+            const passwordActualValida = await new Promise((resolve) => {
+                try {
+                    const resultado = hasher.compareSync(oldPass, userData.password);
+                    resolve(resultado);
+                } catch (e) {
+                    console.error("Error al verificar password actual:", e);
+                    resolve(false);
+                }
+            });
+            
+            if (!passwordActualValida) {
+                throw new Error("La contraseña actual es incorrecta");
+            }
+            
+            // Hashear nueva contraseña
+            const nuevoPasswordHash = await new Promise((resolve, reject) => {
+                try {
+                    const hash = hasher.hashSync(newPass, 10);
+                    resolve(hash);
+                } catch (e) {
+                    reject(e);
+                }
+            });
+            
+            // Actualizar en BD
+            const { error: updateError } = await _supabase
+                .from('usuarios')
+                .update({ password: nuevoPasswordHash })
+                .eq('id', currentUser.id);
+            
+            if (updateError) throw updateError;
+            
+            notify("¡Contraseña actualizada con éxito! 🔒");
+            
+            // Limpiar campos
+            document.getElementById('input-old-pass').value = '';
+            document.getElementById('input-new-pass').value = '';
+            document.getElementById('input-confirm-pass').value = '';
+            
+            setTimeout(cerrarModales, 1000);
+            
+        } catch (e) {
+            notify(e.message, true);
+        } finally {
+            toggleLoading('btn-change-pass', false);
+        }
+    };
+}
 
-['settings', 'codes', 'leaderboard', 'missions', 'inventory', 'changelog'].forEach(id => {
-    const btn = document.getElementById(`btn-close-${id}`);
-    if(btn) btn.onclick = cerrarModales;
-});
+const btnCloseSettings = document.getElementById('btn-close-settings');
+if (btnCloseSettings) btnCloseSettings.onclick = cerrarModales;
 
-// Event listeners para el modal de logout
-document.getElementById('btn-confirm-logout').onclick = () => {
-    cerrarModales();
-    logout();
-};
+const btnCloseColors = document.getElementById('btn-close-colors');
+if (btnCloseColors) btnCloseColors.onclick = cerrarModales;
 
-document.getElementById('btn-cancel-logout').onclick = cerrarModales;
+const btnCloseCodes = document.getElementById('btn-close-codes');
+if (btnCloseCodes) btnCloseCodes.onclick = cerrarModales;
+
+const btnCloseLeaderboard = document.getElementById('btn-close-leaderboard');
+if (btnCloseLeaderboard) btnCloseLeaderboard.onclick = cerrarModales;
+
+const btnCloseMissions = document.getElementById('btn-close-missions');
+if (btnCloseMissions) btnCloseMissions.onclick = cerrarModales;
+
+const btnCloseChangelog = document.getElementById('btn-close-changelog');
+if (btnCloseChangelog) btnCloseChangelog.onclick = cerrarModales;
+
+const btnConfirmLogout = document.getElementById('btn-confirm-logout');
+if (btnConfirmLogout) {
+    btnConfirmLogout.onclick = () => {
+        cerrarModales();
+        logout();
+    };
+}
+
+const btnCancelLogout = document.getElementById('btn-cancel-logout');
+if (btnCancelLogout) btnCancelLogout.onclick = cerrarModales;
 
 window.onclick = (event) => {
     if (event.target.classList.contains('modal')) cerrarModales();
 };
 
-document.getElementById('btn-claim-12h').onclick = () => reclamarMision(12);
-document.getElementById('btn-claim-24h').onclick = () => reclamarMision(24);
+const btnClaim12h = document.getElementById('btn-claim-12h');
+const btnClaim24h = document.getElementById('btn-claim-24h');
+if (btnClaim12h) btnClaim12h.onclick = () => reclamarMision(12);
+if (btnClaim24h) btnClaim24h.onclick = () => reclamarMision(24);
 
-
-// --- ACTUALIZAR PERFIL (ARREGLADO: VALIDACIÓN DE DUPLICADOS) ---
-document.getElementById('btn-update').onclick = async () => {
-    const nuevoU = document.getElementById('new-username').value.trim();
-    const nuevaP = document.getElementById('new-password').value.trim();
-    
-    if (!nuevoU) return notify("El nombre no puede estar vacío", true);
-    if (!validarUsername(nuevoU)) return notify("Nombre inválido (solo letras/números)", true);
-    
-    toggleLoading('btn-update', true);
-    try {
-        // 1. Verificar si el nombre ya está en uso por OTRA persona
-        if (nuevoU !== currentUser.usuario) {
-            const { data: existingUser, error: checkError } = await _supabase
-                .from('usuarios')
-                .select('id')
-                .eq('usuario', nuevoU)
-                .neq('id', currentUser.id) // Excluirse a sí mismo
-                .maybeSingle();
-            
-            if (checkError) throw checkError;
-            if (existingUser) throw new Error("Ese nombre de usuario ya está ocupado 🚫");
-        }
-
-        // 2. Preparar actualización
-        const updateData = { usuario: nuevoU };
-        if (nuevaP) {
-            if (nuevaP.length < 4) throw new Error("La contraseña es muy corta");
-            updateData.password = nuevaP;
-        }
+const btnRedeemCode = document.getElementById('btn-redeem-code');
+if (btnRedeemCode) {
+    btnRedeemCode.onclick = async () => {
+        const input = document.getElementById('input-code').value.trim().toUpperCase();
+        if (!input) return notify("Escribe un código", true);
         
-        // 3. Ejecutar
-        const { error } = await _supabase.from('usuarios').update(updateData).eq('id', currentUser.id);
-        if (error) throw error;
-        
-        notify("Perfil actualizado con éxito ✨");
-        
-        // Update local
-        currentUser.usuario = nuevoU;
-        // Refrescar toda la UI
-        renderDashboard(currentUser); 
-        setTimeout(cerrarModales, 500);
-        
-    } catch (e) { notify(e.message, true); } 
-    finally { toggleLoading('btn-update', false); }
-};
+        toggleLoading('btn-redeem-code', true);
+        try {
+            const { data: codigo, error: errCod } = await _supabase.from('codigos').select('*').eq('codigo', input).maybeSingle();
+            if (errCod) throw errCod;
+            if (!codigo) throw new Error("Código no válido o expirado");
 
-document.getElementById('btn-redeem-code').onclick = async () => {
-    const input = document.getElementById('input-code').value.trim().toUpperCase();
-    if (!input) return notify("Escribe un código", true);
-    
-    toggleLoading('btn-redeem-code', true);
-    try {
-        const { data: codigo, error: errCod } = await _supabase.from('codigos').select('*').eq('codigo', input).maybeSingle();
-        if (errCod) throw errCod;
-        if (!codigo) throw new Error("Código no válido o expirado");
+            const { data: usado } = await _supabase.from('codigos_usados').select('*').eq('usuario_id', currentUser.id).eq('codigo_id', codigo.id).maybeSingle();
+            if (usado) throw new Error("Ya has canjeado este código 🎁");
 
-        const { data: usado } = await _supabase.from('codigos_usados').select('*').eq('usuario_id', currentUser.id).eq('codigo_id', codigo.id).maybeSingle();
-        if (usado) throw new Error("Ya has canjeado este código 🎁");
+            await _supabase.from('codigos_usados').insert([{ usuario_id: currentUser.id, codigo_id: codigo.id }]);
 
-        // Registrar uso
-        await _supabase.from('codigos_usados').insert([{ usuario_id: currentUser.id, codigo_id: codigo.id }]);
-
-        let msg = "";
-        // Dar color si hay
-        if (codigo.recompensa_especial) {
-            // Verificar si ya lo tiene para no llenar la DB de errores
-            const {data: tieneColor} = await _supabase.from('inventario_colores')
-                .select('*').eq('usuario_id', currentUser.id).eq('color_hex', codigo.recompensa_especial).maybeSingle();
-            
-            if(!tieneColor){
-                await _supabase.from('inventario_colores').insert([{ usuario_id: currentUser.id, color_hex: codigo.recompensa_especial }]);
-                msg = " + Nuevo Color 🎨";
+            let msg = "";
+            if (codigo.recompensa_especial) {
+                const {data: tieneColor} = await _supabase.from('inventario_colores')
+                    .select('*').eq('usuario_id', currentUser.id).eq('color_hex', codigo.recompensa_especial).maybeSingle();
+                
+                if(!tieneColor){
+                    await _supabase.from('inventario_colores').insert([{ usuario_id: currentUser.id, color_hex: codigo.recompensa_especial }]);
+                    msg = " + Nuevo Color 🎨";
+                }
             }
-        }
 
-        await sumarXP(codigo.xp_reward, `¡Código canjeado! +${codigo.xp_reward} XP${msg}`);
-        
-        document.getElementById('input-code').value = ""; 
-        setTimeout(cerrarModales, 1500);
-        
-    } catch (err) { notify(err.message, true); } 
-    finally { toggleLoading('btn-redeem-code', false); }
-};
-
-document.getElementById('btn-logout-side').onclick = () => {
-    openModal('logout-modal');
-};
+            await sumarXP(codigo.xp_reward, `¡Código canjeado! +${codigo.xp_reward} XP${msg}`);
+            
+            document.getElementById('input-code').value = ""; 
+            setTimeout(cerrarModales, 1500);
+            
+        } catch (err) { notify(err.message, true); } 
+        finally { toggleLoading('btn-redeem-code', false); }
+    };
+}
 
 // --- INITIALIZATION ---
-(async () => {
+window.addEventListener('DOMContentLoaded', async () => {
+    console.log("🚀 Iniciando Moon Play Dashboard...");
+    
+    // Esperar a que bcryptjs esté listo
+    if (!hasher) {
+        try {
+            await waitForBcrypt();
+        } catch (error) {
+            console.error("❌ Error crítico al cargar bcryptjs:", error);
+            notify("Error al cargar el sistema de seguridad", true);
+        }
+    }
+    
+    inicializarSistemaFeedback();
+    console.log("✅ Sistema de feedback inicializado");
+    
     const saved = localStorage.getItem('supabase_user');
     if (saved) {
         try {
             const parsed = JSON.parse(saved);
-            // Renderizado inicial rápido
+            
+            if (!parsed || !parsed.id || !parsed.usuario) {
+                console.warn("⚠️ Datos de sesión incompletos - limpiando localStorage");
+                localStorage.removeItem('supabase_user');
+                return;
+            }
+            
+            console.log("✅ Sesión encontrada en localStorage:", parsed.usuario);
+            
+            // 🔒 SEGURIDAD: Asegurar que no haya password
+            delete parsed.password;
+            currentUser = parsed;
+            u = parsed; // Sincronizar variable global
+            
             renderDashboard(parsed);
-            // Verificación asíncrona real
-            refrescarDatosUsuario();
+            console.log("✅ Dashboard renderizado con datos guardados");
+            
+            await refrescarDatosUsuario();
+            console.log("✅ Datos sincronizados con la base de datos");
+            
         } catch (e) {
-            console.error("Sesión inválida");
-            logout();
+            console.error("❌ Error al cargar sesión:", e);
+            localStorage.removeItem('supabase_user');
         }
+    } else {
+        console.log("ℹ️ No hay sesión guardada - mostrando pantalla de login");
     }
-})();
+});
 
-// Consola Master
+// Consola Master (si existe)
 const btnFetch = document.getElementById('btn-fetch');
 if(btnFetch) {
     btnFetch.onclick = async () => {
@@ -599,4 +802,198 @@ if(btnFetch) {
         if(error) out.innerText = "Error: " + error.message;
         else out.innerText = JSON.stringify(data, null, 2);
     };
+}
+
+// --- SISTEMA DE FEEDBACK ---
+function abrirFeedback() {
+    if (!currentUser) return;
+    
+    if (currentUser.rango === 'OWNER') {
+        openModal('feedback-owner-modal');
+        cargarFeedback();
+    } else {
+        document.getElementById('feedback-type').value = 'Asunto';
+        const textArea = document.getElementById('feedback-text');
+        textArea.value = '';
+        actualizarContadorCaracteres();
+        openModal('feedback-user-modal');
+    }
+}
+
+function inicializarSistemaFeedback() {
+    const feedbackTextArea = document.getElementById('feedback-text');
+    if (feedbackTextArea) {
+        feedbackTextArea.addEventListener('input', actualizarContadorCaracteres);
+    }
+
+    const btnSendFeedback = document.getElementById('btn-send-feedback');
+    if (btnSendFeedback) {
+        btnSendFeedback.onclick = async () => {
+            const tipo = document.getElementById('feedback-type').value;
+            const texto = document.getElementById('feedback-text').value.trim();
+            
+            if (!texto) return notify("Escribe un mensaje", true);
+            if (texto.length < 10) return notify("El mensaje es muy corto (mínimo 10 caracteres)", true);
+            
+            toggleLoading('btn-send-feedback', true);
+            
+            try {
+                const { error } = await _supabase.from('feedback').insert([{
+                    usuario_id: currentUser.id,
+                    usuario_nombre: currentUser.usuario,
+                    tipo: tipo,
+                    mensaje: texto,
+                    fecha: new Date().toISOString()
+                }]);
+                
+                if (error) throw error;
+                
+                notify("¡Comentario enviado con éxito! ✅");
+                document.getElementById('feedback-text').value = '';
+                setTimeout(cerrarModales, 1000);
+                
+            } catch (e) {
+                notify("Error al enviar: " + e.message, true);
+            } finally {
+                toggleLoading('btn-send-feedback', false);
+            }
+        };
+    }
+
+    const btnLoadMoreFeedback = document.getElementById('btn-load-more-feedback');
+    if (btnLoadMoreFeedback) {
+        btnLoadMoreFeedback.onclick = () => cargarFeedback(true);
+    }
+
+    const btnCloseFeedbackUser = document.getElementById('btn-close-feedback-user');
+    const btnCloseFeedbackOwner = document.getElementById('btn-close-feedback-owner');
+    
+    if (btnCloseFeedbackUser) btnCloseFeedbackUser.onclick = cerrarModales;
+    if (btnCloseFeedbackOwner) btnCloseFeedbackOwner.onclick = cerrarModales;
+}
+
+function actualizarContadorCaracteres() {
+    const textArea = document.getElementById('feedback-text');
+    const counter = document.getElementById('char-counter');
+    const status = document.getElementById('char-status');
+    const btnSend = document.getElementById('btn-send-feedback');
+    
+    if (!textArea || !counter || !status || !btnSend) return;
+    
+    const length = textArea.value.length;
+    const minLength = 10;
+    
+    counter.innerText = `${length} / ${minLength} caracteres mínimos`;
+    
+    if (length >= minLength) {
+        counter.style.color = 'var(--primary)';
+        status.innerText = '✓ Listo para enviar';
+        status.style.color = 'var(--primary)';
+        btnSend.disabled = false;
+    } else {
+        const remaining = minLength - length;
+        counter.style.color = 'var(--text-muted)';
+        status.innerText = `Faltan ${remaining} caracteres`;
+        status.style.color = '#ef4444';
+        btnSend.disabled = true;
+    }
+}
+
+let feedbackOffset = 0;
+const feedbackLimit = 10;
+let hayMasFeedback = false;
+
+async function cargarFeedback(esCargarMas = false) {
+    const feedbackList = document.getElementById('feedback-list');
+    const btnLoadMore = document.getElementById('btn-load-more-feedback');
+    if (!feedbackList) return;
+    
+    if (!esCargarMas) {
+        feedbackOffset = 0;
+        feedbackList.innerHTML = "<p style='text-align:center; color:var(--text-muted); padding:20px;'>Cargando...</p>";
+        if (btnLoadMore) btnLoadMore.classList.add('hidden');
+    } else {
+        if (btnLoadMore) {
+            btnLoadMore.disabled = true;
+            btnLoadMore.innerText = 'Cargando...';
+        }
+    }
+    
+    try {
+        const { data, error } = await _supabase
+            .from('feedback')
+            .select('*')
+            .order('fecha', { ascending: false })
+            .range(feedbackOffset, feedbackOffset + feedbackLimit);
+        
+        if (error) throw error;
+        
+        if (!data || data.length === 0) {
+            if (!esCargarMas) {
+                feedbackList.innerHTML = "<p style='text-align:center; color:var(--text-muted); padding:40px 20px;'>No hay comentarios aún.</p>";
+            }
+            if (btnLoadMore) btnLoadMore.classList.add('hidden');
+            return;
+        }
+        
+        if (!esCargarMas) {
+            feedbackList.innerHTML = '';
+        }
+        
+        hayMasFeedback = data.length > feedbackLimit;
+        const itemsAMostrar = hayMasFeedback ? data.slice(0, feedbackLimit) : data;
+        
+        itemsAMostrar.forEach(item => {
+            const feedbackCard = document.createElement('div');
+            feedbackCard.style.cssText = 'background: rgba(0,0,0,0.3); padding: 15px; border-radius: 12px; margin-bottom: 12px; border: 1px solid rgba(255,255,255,0.05);';
+            
+            const fecha = new Date(item.fecha);
+            const fechaFormato = fecha.toLocaleDateString('es-ES', { 
+                year: 'numeric', 
+                month: 'short', 
+                day: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit'
+            });
+            
+            const tipoColor = item.tipo === 'Asunto' ? '#3ecf8e' : '#60a5fa';
+            
+            feedbackCard.innerHTML = `
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                    <div>
+                        <span style="color: white; font-weight: 600; font-size: 0.95rem;">${item.usuario_nombre}</span>
+                        <span style="color: ${tipoColor}; font-size: 0.75rem; font-weight: 700; margin-left: 10px; background: rgba(0,0,0,0.3); padding: 3px 8px; border-radius: 6px;">${item.tipo}</span>
+                    </div>
+                    <span style="color: var(--text-muted); font-size: 0.75rem;">${fechaFormato}</span>
+                </div>
+                <p style="color: var(--text-muted); font-size: 0.9rem; line-height: 1.5; margin: 0; white-space: pre-wrap;">${item.mensaje}</p>
+            `;
+            
+            feedbackList.appendChild(feedbackCard);
+        });
+        
+        feedbackOffset += itemsAMostrar.length;
+        
+        if (btnLoadMore) {
+            if (hayMasFeedback) {
+                btnLoadMore.classList.remove('hidden');
+                btnLoadMore.disabled = false;
+                btnLoadMore.innerText = 'Cargar más comentarios';
+            } else {
+                btnLoadMore.classList.add('hidden');
+            }
+        }
+        
+    } catch (e) {
+        if (!esCargarMas) {
+            feedbackList.innerHTML = "<p style='color:var(--error); text-align:center; padding:20px;'>Error al cargar comentarios</p>";
+        } else {
+            notify("Error al cargar más comentarios", true);
+        }
+        console.error("Error cargando feedback:", e);
+        if (btnLoadMore) {
+            btnLoadMore.disabled = false;
+            btnLoadMore.innerText = 'Cargar más comentarios';
+        }
+    }
 }
