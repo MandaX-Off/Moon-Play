@@ -29,14 +29,14 @@
             background-image: radial-gradient(circle at 10% 20%, rgba(62, 207, 142, 0.05) 0%, transparent 20%), radial-gradient(circle at 90% 80%, rgba(100, 100, 255, 0.05) 0%, transparent 20%);
             color: var(--text); 
             display: flex; justify-content: center; align-items: center; 
-            min-height: 100vh; margin: 0; padding: 20px; 
+            height: 100vh; margin: 0; padding: 0; overflow: hidden;
         }
         
         .dashboard-card { 
-            display: flex; width: 100%; max-width: 950px; min-height: 600px; 
-            background: var(--card-bg); border-radius: 24px; overflow: hidden; 
-            box-shadow: 0 25px 50px -12px rgba(0,0,0,0.6); 
-            border: var(--glass-border);
+            display: flex; width: 100%; height: 100%; 
+            background: var(--card-bg); border-radius: 0; overflow: hidden; 
+            box-shadow: none;
+            border: none;
             backdrop-filter: blur(20px);
         }
 
@@ -45,6 +45,7 @@
             width: 280px; background: var(--sidebar-bg); display: none; 
             flex-direction: column; padding: 35px 20px; 
             border-right: var(--glass-border);
+            height: 100vh; overflow-y: auto;
         }
         .profile-section { text-align: center; margin-bottom: 30px; }
         .avatar { 
@@ -74,7 +75,7 @@
         .nav-item:active { transform: scale(0.98); }
 
         /* --- MAIN --- */
-        .main-content { flex: 1; padding: 50px; display: flex; flex-direction: column; position: relative; overflow-y: auto; }
+        .main-content { flex: 1; padding: 50px; display: flex; flex-direction: column; position: relative; overflow-y: auto; height: 100vh; }
         .auth-box { width: 100%; max-width: 360px; margin: auto; animation: fadeIn 0.5s ease; }
         
         .input-group { position: relative; margin-bottom: 15px; }
@@ -292,9 +293,22 @@
         <div class="modal-content">
             <h3>📋 Registro de Actualizaciones</h3>
             <div style="max-height: 400px; overflow-y: auto; margin-top: 15px; padding-right: 5px;">
-                <p style="text-align: center; color: var(--text-muted); padding: 40px 20px;">
-                    Aquí se mostrarán las últimas actualizaciones y mejoras del sistema.
-                </p>
+                <div style="background: rgba(0,0,0,0.3); padding: 20px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.08);">
+                    <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 15px;">
+                        <span style="color: var(--primary); font-weight: 800; font-size: 1.1rem;">Versión Actual:</span>
+                        <span style="color: white; font-weight: 700; font-size: 1.1rem;">1.10.0</span>
+                    </div>
+                    
+                    <h4 style="color: var(--primary); margin-top: 20px; margin-bottom: 12px; font-size: 1rem; font-weight: 700;">Cambios de la v1.10.0:</h4>
+                    
+                    <ul style="color: var(--text-muted); line-height: 1.8; font-size: 0.95rem; padding-left: 20px;">
+                        <li style="margin-bottom: 8px;">Se expandió el dashboard principal para mayor comodidad.</li>
+                        <li style="margin-bottom: 8px;">Arreglo de bugs.</li>
+                        <li style="margin-bottom: 8px;">Se agrega el Registro de Actualizaciones.</li>
+                        <li style="margin-bottom: 8px;">Se mejoró el Sistema de Cerrar Sesión.</li>
+                        <li style="margin-bottom: 8px;">Se mejoró el Top de Jugadores.</li>
+                    </ul>
+                </div>
             </div>
             <button id="btn-close-changelog" class="btn-cancel">Cerrar</button>
         </div>
