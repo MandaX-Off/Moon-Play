@@ -171,6 +171,7 @@
                 <div class="nav-item" id="btn-open-leaderboard">🏆 Top Jugadores</div>
                 <div class="nav-item" id="btn-open-missions">📅 Misiones Diarias</div>
                 <div class="nav-item" id="btn-open-inventory">🎒 Inventario</div>
+                <div class="nav-item" id="btn-open-changelog">📋 Registro de Actualizaciones</div>
             </nav>
 
             <div class="nav-item" id="btn-logout-side" style="color: var(--error); margin-top: auto;">
@@ -284,6 +285,28 @@
             </div>
             
             <button id="btn-close-missions" class="btn-cancel">Cerrar</button>
+        </div>
+    </div>
+
+    <div id="changelog-modal" class="modal">
+        <div class="modal-content">
+            <h3>📋 Registro de Actualizaciones</h3>
+            <div style="max-height: 400px; overflow-y: auto; margin-top: 15px; padding-right: 5px;">
+                <p style="text-align: center; color: var(--text-muted); padding: 40px 20px;">
+                    Aquí se mostrarán las últimas actualizaciones y mejoras del sistema.
+                </p>
+            </div>
+            <button id="btn-close-changelog" class="btn-cancel">Cerrar</button>
+        </div>
+    </div>
+
+    <div id="logout-modal" class="modal">
+        <div class="modal-content">
+            <div style="text-align: center; margin-bottom: 20px; font-size: 3rem;">🚪</div>
+            <h3 style="text-align: center;">¿Cerrar Sesión?</h3>
+            <p style="font-size: 0.9rem; color: var(--text-muted); text-align: center; margin-bottom: 20px;">¿Estás seguro que deseas cerrar tu sesión actual?</p>
+            <button id="btn-confirm-logout" style="background: var(--error);">Sí, Cerrar Sesión</button>
+            <button id="btn-cancel-logout" class="btn-cancel">Cancelar</button>
         </div>
     </div>
 

@@ -309,7 +309,7 @@ async function cargarLeaderboard() {
     try {
         const { data, error } = await _supabase
             .from('usuarios')
-            .select('usuario, xp')
+            .select('usuario, xp, color_name')
             .gt('xp', 0)
             .order('xp', { ascending: false })
             .limit(50);
@@ -333,10 +333,13 @@ async function cargarLeaderboard() {
                 item.style.border = '1px solid var(--primary)';
             }
 
+            // Color del nombre (por defecto blanco si no tiene)
+            const userColor = user.color_name || '#ffffff';
+
             item.innerHTML = `
                 <span class="rank-number">${rankDisplay}</span>
-                <span class="rank-name">${user.usuario}</span>
-                <span class="rank-xp">Nivel ${info.nivel}</span>`;
+                <span class="rank-name" style="color: ${userColor};">${user.usuario}</span>
+                <span class="rank-xp">Nivel ${info.nivel} (${user.xp.toLocaleString()} XP)</span>`;
             listContainer.appendChild(item);
         });
     } catch (e) { listContainer.innerHTML = "<p style='color:var(--error); text-align:center;'>Error al cargar ranking</p>"; }
@@ -456,11 +459,22 @@ document.getElementById('btn-open-inventory').onclick = () => {
     openModal('inventory-modal');
     cargarInventarioColores();
 };
+document.getElementById('btn-open-changelog').onclick = () => {
+    openModal('changelog-modal');
+};
 
-['settings', 'codes', 'leaderboard', 'missions', 'inventory'].forEach(id => {
+['settings', 'codes', 'leaderboard', 'missions', 'inventory', 'changelog'].forEach(id => {
     const btn = document.getElementById(`btn-close-${id}`);
     if(btn) btn.onclick = cerrarModales;
 });
+
+// Event listeners para el modal de logout
+document.getElementById('btn-confirm-logout').onclick = () => {
+    cerrarModales();
+    logout();
+};
+
+document.getElementById('btn-cancel-logout').onclick = cerrarModales;
 
 window.onclick = (event) => {
     if (event.target.classList.contains('modal')) cerrarModales();
@@ -555,7 +569,7 @@ document.getElementById('btn-redeem-code').onclick = async () => {
 };
 
 document.getElementById('btn-logout-side').onclick = () => {
-    if(confirm("¿Seguro que quieres cerrar sesión?")) logout();
+    openModal('logout-modal');
 };
 
 // --- INITIALIZATION ---
