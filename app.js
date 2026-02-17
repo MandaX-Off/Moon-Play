@@ -13,46 +13,6 @@ if (!CONFIG.ANON_KEY || CONFIG.ANON_KEY.length < 20) {
 
 const _supabase = supabase.createClient(CONFIG.URL, CONFIG.ANON_KEY);
 
-// 🔒 DETECCIÓN ROBUSTA DE BCRYPTJS
-let hasher = null;
-let bcryptLoadAttempts = 0;
-const MAX_BCRYPT_ATTEMPTS = 10;
-
-async function waitForBcrypt() {
-    return new Promise((resolve, reject) => {
-        const checkInterval = setInterval(() => {
-            if (window.dcodeIO && window.dcodeIO.bcrypt) {
-                hasher = window.dcodeIO.bcrypt;
-                clearInterval(checkInterval);
-                console.log("✅ bcryptjs cargado correctamente");
-                resolve(true);
-            } else if (window.bcrypt) {
-                hasher = window.bcrypt;
-                clearInterval(checkInterval);
-                console.log("✅ bcryptjs cargado correctamente");
-                resolve(true);
-            } else {
-                bcryptLoadAttempts++;
-                if (bcryptLoadAttempts >= MAX_BCRYPT_ATTEMPTS) {
-                    clearInterval(checkInterval);
-                    console.error("❌ No se pudo cargar bcryptjs después de múltiples intentos");
-                    reject(new Error("No se pudo cargar la librería de encriptación"));
-                }
-            }
-        }, 100);
-    });
-}
-
-// Inicializar bcryptjs al cargar
-(async function initBcrypt() {
-    try {
-        await waitForBcrypt();
-    } catch (error) {
-        console.error("Error crítico:", error);
-        alert("Error al cargar el sistema de seguridad. Por favor, recarga la página.");
-    }
-})();
-
 let currentUser = null;
 let u = null; // Variable global para compatibilidad con UI
 let isLoginMode = true;
@@ -171,8 +131,6 @@ async function refrescarDatosUsuario() {
             return;
         }
 
-        // 🔒 SEGURIDAD: Eliminar password de memoria
-        delete data.password; 
         currentUser = data;
         u = data; // Sincronizar variable global
         localStorage.setItem('supabase_user', JSON.stringify(data));
@@ -406,8 +364,6 @@ async function cargarLeaderboard() {
 function renderDashboard(user) {
     if (!user) return;
     
-    // 🔒 SEGURIDAD: Eliminar password de objetos globales
-    delete user.password;
     currentUser = user;
     u = user; // Sincronizar variable global
     
@@ -446,9 +402,27 @@ function renderDashboard(user) {
     }
 }
 
-function logout() {
-    localStorage.removeItem('supabase_user');
-    location.reload();
+async function logout() {
+    try {
+        // 🔒 CERRAR SESIÓN EN SUPABASE AUTH
+        const { error } = await _supabase.auth.signOut();
+        if (error) throw error;
+        
+        currentUser = null;
+        u = null;
+        localStorage.removeItem('supabase_user');
+        
+        notify("Sesión cerrada correctamente");
+        location.reload();
+        
+    } catch (e) {
+        console.error("Error al cerrar sesión:", e);
+        // Forzar cierre de sesión incluso si hay error
+        currentUser = null;
+        u = null;
+        localStorage.removeItem('supabase_user');
+        location.reload();
+    }
 }
 
 // --- AUTH CONTROLS ---
@@ -464,6 +438,8 @@ if (btnLoginTab && btnRegisterTab && btnAuth) {
         btnLoginTab.style.color = '#0b0f1a';
         btnRegisterTab.style.background = 'transparent';
         btnRegisterTab.style.color = 'var(--text-muted)';
+        // Ocultar campo de email en modo login
+        document.getElementById('email-group').style.display = 'none';
     };
     
     btnRegisterTab.onclick = () => {
@@ -473,14 +449,11 @@ if (btnLoginTab && btnRegisterTab && btnAuth) {
         btnRegisterTab.style.color = '#0b0f1a';
         btnLoginTab.style.background = 'transparent';
         btnLoginTab.style.color = 'var(--text-muted)';
+        // Mostrar campo de email en modo registro
+        document.getElementById('email-group').style.display = 'block';
     };
 
     btnAuth.onclick = async () => {
-        if (!hasher) {
-            notify("Sistema de seguridad no está listo. Intenta de nuevo en unos segundos.", true);
-            return;
-        }
-        
         const uInput = document.getElementById('input-user');
         const pInput = document.getElementById('input-pass');
         const usuario = uInput.value.trim();
@@ -489,48 +462,68 @@ if (btnLoginTab && btnRegisterTab && btnAuth) {
         if (!usuario || !password) return notify("Completa todos los campos", true);
         if (!validarUsername(usuario)) return notify("El usuario solo puede tener letras y números", true);
         if (usuario.length < 3) return notify("El usuario es muy corto (min 3)", true);
+        if (password.length < 6) return notify("La contraseña debe tener al menos 6 caracteres", true);
         
         toggleLoading('btn-auth', true);
         try {
             if (isLoginMode) {
-                // 🔒 LOGIN CON BCRYPT
-                const { data: userData, error: selectError } = await _supabase
+                // 🔒 LOGIN CON SUPABASE AUTH
+                // Primero necesitamos obtener el email del usuario desde la tabla
+                const { data: userProfile, error: profileError } = await _supabase
                     .from('usuarios')
-                    .select('*')
+                    .select('email, id')
                     .eq('usuario', usuario)
                     .maybeSingle();
                 
-                if (selectError) throw selectError;
+                if (profileError) throw profileError;
                 
-                if (!userData) {
+                if (!userProfile) {
                     notify("Usuario o contraseña incorrectos", true);
-                } else {
-                    // Comparar password
-                    const passwordValida = await new Promise((resolve) => {
-                        try {
-                            const resultado = hasher.compareSync(password, userData.password);
-                            resolve(resultado);
-                        } catch (e) {
-                            console.error("Error al comparar password:", e);
-                            resolve(false);
-                        }
-                    });
-                    
-                    if (passwordValida) {
-                        // 🔒 SEGURIDAD: Eliminar password antes de guardar
-                        delete userData.password;
-                        localStorage.setItem('supabase_user', JSON.stringify(userData));
-                        
-                        notify("¡Hola de nuevo! 👋");
-                        renderDashboard(userData);
-                        uInput.value = "";
-                        pInput.value = "";
-                    } else {
-                        notify("Usuario o contraseña incorrectos", true);
-                    }
+                    toggleLoading('btn-auth', false);
+                    return;
                 }
+                
+                // Intentar login con Supabase Auth usando el email
+                const { data: authData, error: authError } = await _supabase.auth.signInWithPassword({
+                    email: userProfile.email,
+                    password: password
+                });
+                
+                if (authError) {
+                    console.error("Error de autenticación:", authError);
+                    notify("Usuario o contraseña incorrectos", true);
+                    toggleLoading('btn-auth', false);
+                    return;
+                }
+                
+                // Obtener los datos completos del usuario de la tabla
+                const { data: userData, error: dbError } = await _supabase
+                    .from('usuarios')
+                    .select('*')
+                    .eq('id', authData.user.id)
+                    .single();
+                
+                if (dbError) throw dbError;
+                
+                localStorage.setItem('supabase_user', JSON.stringify(userData));
+                
+                notify("¡Hola de nuevo! 👋");
+                renderDashboard(userData);
+                uInput.value = "";
+                pInput.value = "";
+                document.getElementById('input-email').value = "";
+                
             } else {
-                // 🔒 REGISTRO CON BCRYPT
+                // 🔒 REGISTRO CON SUPABASE AUTH
+                const emailInput = document.getElementById('input-email');
+                const email = emailInput.value.trim();
+                
+                // Validar email
+                if (!email) return notify("Completa el campo de email", true);
+                if (!email.includes('@') || !email.includes('.')) {
+                    return notify("Email no válido", true);
+                }
+                
                 const { data: exist } = await _supabase
                     .from('usuarios')
                     .select('id')
@@ -540,31 +533,52 @@ if (btnLoginTab && btnRegisterTab && btnAuth) {
                 if (exist) {
                     notify("¡Ese nombre de usuario ya existe!", true);
                 } else {
-                    // Hashear contraseña
-                    const passwordHash = await new Promise((resolve, reject) => {
-                        try {
-                            const hash = hasher.hashSync(password, 10);
-                            resolve(hash);
-                        } catch (e) {
-                            reject(e);
+                    // Registrar en Supabase Auth con el email proporcionado
+                    const { data: authData, error: authError } = await _supabase.auth.signUp({
+                        email: email,
+                        password: password,
+                        options: {
+                            data: {
+                                username: usuario
+                            }
                         }
                     });
                     
-                    const { error } = await _supabase
+                    if (authError) {
+                        console.error("Error al registrar en Auth:", authError);
+                        throw new Error("Error al crear la cuenta: " + authError.message);
+                    }
+                    
+                    if (!authData.user) {
+                        throw new Error("No se pudo crear el usuario en el sistema de autenticación");
+                    }
+                    
+                    // Crear el perfil del usuario en la tabla usuarios con el mismo ID de Auth
+                    const { error: insertError } = await _supabase
                         .from('usuarios')
                         .insert([{ 
-                            usuario: usuario, 
-                            password: passwordHash, 
+                            id: authData.user.id, // ⭐ USAR EL ID DE SUPABASE AUTH
+                            usuario: usuario,
+                            email: email,
                             rango: 'USUARIO', 
-                            xp: 0 
+                            xp: 0,
+                            color_name: '#ffffff',
+                            inventario: JSON.stringify([])
                         }]);
                     
-                    if (error) throw error;
+                    if (insertError) {
+                        console.error("Error al crear perfil:", insertError);
+                        // Si falla la creación del perfil, intentar eliminar el usuario de Auth
+                        await _supabase.auth.signOut();
+                        throw new Error("Error al crear el perfil del usuario");
+                    }
+                    
                     notify("¡Cuenta creada! Inicia sesión ahora.");
                     btnLoginTab.click();
                 }
             }
         } catch (err) { 
+            console.error("Error en autenticación:", err);
             notify("Error: " + err.message, true); 
         } finally { 
             toggleLoading('btn-auth', false); 
@@ -579,15 +593,10 @@ function openModal(modalId) {
     modal.style.opacity = '1';
 }
 
-// 🔒 CAMBIO DE CONTRASEÑA CON BCRYPT
+// 🔒 CAMBIO DE CONTRASEÑA CON SUPABASE AUTH
 const btnChangePass = document.getElementById('btn-change-pass');
 if (btnChangePass) {
     btnChangePass.onclick = async () => {
-        if (!hasher) {
-            notify("Sistema de seguridad no está listo. Intenta de nuevo en unos segundos.", true);
-            return;
-        }
-        
         const oldPass = document.getElementById('input-old-pass').value.trim();
         const newPass = document.getElementById('input-new-pass').value.trim();
         const confirmPass = document.getElementById('input-confirm-pass').value.trim();
@@ -600,52 +609,37 @@ if (btnChangePass) {
             return notify("Las contraseñas nuevas no coinciden", true);
         }
         
-        if (newPass.length < 4) {
-            return notify("La contraseña nueva es muy corta (mín. 4 caracteres)", true);
+        if (newPass.length < 6) {
+            return notify("La contraseña nueva debe tener al menos 6 caracteres", true);
         }
         
         toggleLoading('btn-change-pass', true);
         
         try {
-            // Obtener password actual de la BD
-            const { data: userData, error: fetchError } = await _supabase
+            // Con Supabase Auth, primero necesitamos verificar la contraseña actual
+            // intentando hacer login con ella
+            const { data: userData } = await _supabase
                 .from('usuarios')
-                .select('password')
+                .select('email')
                 .eq('id', currentUser.id)
                 .single();
             
-            if (fetchError) throw fetchError;
+            if (!userData) throw new Error("No se pudo verificar el usuario");
             
-            // Verificar contraseña actual
-            const passwordActualValida = await new Promise((resolve) => {
-                try {
-                    const resultado = hasher.compareSync(oldPass, userData.password);
-                    resolve(resultado);
-                } catch (e) {
-                    console.error("Error al verificar password actual:", e);
-                    resolve(false);
-                }
+            // Verificar la contraseña actual intentando hacer signIn
+            const { error: verifyError } = await _supabase.auth.signInWithPassword({
+                email: userData.email,
+                password: oldPass
             });
             
-            if (!passwordActualValida) {
+            if (verifyError) {
                 throw new Error("La contraseña actual es incorrecta");
             }
             
-            // Hashear nueva contraseña
-            const nuevoPasswordHash = await new Promise((resolve, reject) => {
-                try {
-                    const hash = hasher.hashSync(newPass, 10);
-                    resolve(hash);
-                } catch (e) {
-                    reject(e);
-                }
+            // Actualizar la contraseña
+            const { error: updateError } = await _supabase.auth.updateUser({
+                password: newPass
             });
-            
-            // Actualizar en BD
-            const { error: updateError } = await _supabase
-                .from('usuarios')
-                .update({ password: nuevoPasswordHash })
-                .eq('id', currentUser.id);
             
             if (updateError) throw updateError;
             
@@ -662,6 +656,123 @@ if (btnChangePass) {
             notify(e.message, true);
         } finally {
             toggleLoading('btn-change-pass', false);
+        }
+    };
+}
+
+// 🔒 CAMBIO DE NOMBRE DE USUARIO
+const btnChangeUsername = document.getElementById('btn-change-username');
+if (btnChangeUsername) {
+    btnChangeUsername.onclick = async () => {
+        const newUsername = document.getElementById('input-new-username').value.trim();
+        
+        if (!newUsername) {
+            return notify("Escribe un nuevo nombre de usuario", true);
+        }
+        
+        if (!validarUsername(newUsername)) {
+            return notify("El usuario solo puede tener letras y números", true);
+        }
+        
+        if (newUsername.length < 3) {
+            return notify("El nombre de usuario es muy corto (mín. 3 caracteres)", true);
+        }
+        
+        if (newUsername === currentUser.usuario) {
+            return notify("Este ya es tu nombre de usuario actual", true);
+        }
+        
+        toggleLoading('btn-change-username', true);
+        
+        try {
+            // Verificar que el nombre de usuario no exista
+            const { data: existingUser } = await _supabase
+                .from('usuarios')
+                .select('id')
+                .eq('usuario', newUsername)
+                .maybeSingle();
+            
+            if (existingUser) {
+                throw new Error("Ese nombre de usuario ya está en uso");
+            }
+            
+            // Actualizar en la tabla usuarios
+            const { error: updateError } = await _supabase
+                .from('usuarios')
+                .update({ usuario: newUsername })
+                .eq('id', currentUser.id);
+            
+            if (updateError) throw updateError;
+            
+            // Actualizar estado local
+            currentUser.usuario = newUsername;
+            u.usuario = newUsername;
+            localStorage.setItem('supabase_user', JSON.stringify(currentUser));
+            
+            // Actualizar UI
+            document.getElementById('side-name').innerText = newUsername;
+            document.getElementById('avatar-icon').innerText = newUsername.charAt(0).toUpperCase();
+            
+            notify("¡Nombre de usuario actualizado! 🎉");
+            document.getElementById('input-new-username').value = '';
+            
+        } catch (e) {
+            notify(e.message, true);
+        } finally {
+            toggleLoading('btn-change-username', false);
+        }
+    };
+}
+
+// 🔒 CAMBIO DE EMAIL
+const btnChangeEmail = document.getElementById('btn-change-email');
+if (btnChangeEmail) {
+    btnChangeEmail.onclick = async () => {
+        const newEmail = document.getElementById('input-new-email').value.trim();
+        
+        if (!newEmail) {
+            return notify("Escribe un nuevo email", true);
+        }
+        
+        if (!newEmail.includes('@') || !newEmail.includes('.')) {
+            return notify("Email no válido", true);
+        }
+        
+        if (newEmail === currentUser.email) {
+            return notify("Este ya es tu email actual", true);
+        }
+        
+        toggleLoading('btn-change-email', true);
+        
+        try {
+            // Actualizar email en Supabase Auth
+            // IMPORTANTE: Esto enviará un email de confirmación al nuevo correo
+            const { error: authError } = await _supabase.auth.updateUser({
+                email: newEmail
+            });
+            
+            if (authError) throw authError;
+            
+            // Actualizar en la tabla usuarios
+            const { error: dbError } = await _supabase
+                .from('usuarios')
+                .update({ email: newEmail })
+                .eq('id', currentUser.id);
+            
+            if (dbError) throw dbError;
+            
+            // Actualizar estado local
+            currentUser.email = newEmail;
+            u.email = newEmail;
+            localStorage.setItem('supabase_user', JSON.stringify(currentUser));
+            
+            notify("¡Email actualizado! Revisa tu nuevo correo para confirmar el cambio. 📧");
+            document.getElementById('input-new-email').value = '';
+            
+        } catch (e) {
+            notify(e.message, true);
+        } finally {
+            toggleLoading('btn-change-email', false);
         }
     };
 }
@@ -746,49 +857,60 @@ if (btnRedeemCode) {
 window.addEventListener('DOMContentLoaded', async () => {
     console.log("🚀 Iniciando Moon Play Dashboard...");
     
-    // Esperar a que bcryptjs esté listo
-    if (!hasher) {
-        try {
-            await waitForBcrypt();
-        } catch (error) {
-            console.error("❌ Error crítico al cargar bcryptjs:", error);
-            notify("Error al cargar el sistema de seguridad", true);
-        }
-    }
-    
     inicializarSistemaFeedback();
     console.log("✅ Sistema de feedback inicializado");
     
-    const saved = localStorage.getItem('supabase_user');
-    if (saved) {
-        try {
-            const parsed = JSON.parse(saved);
+    // 🔒 VERIFICAR SESIÓN DE SUPABASE AUTH
+    try {
+        const { data: { session }, error: sessionError } = await _supabase.auth.getSession();
+        
+        if (sessionError) {
+            console.error("Error al obtener sesión:", sessionError);
+            localStorage.removeItem('supabase_user');
+            return;
+        }
+        
+        if (session && session.user) {
+            console.log("✅ Sesión activa de Supabase Auth encontrada");
             
-            if (!parsed || !parsed.id || !parsed.usuario) {
-                console.warn("⚠️ Datos de sesión incompletos - limpiando localStorage");
+            // Obtener datos del usuario de la tabla
+            const { data: userData, error: dbError } = await _supabase
+                .from('usuarios')
+                .select('*')
+                .eq('id', session.user.id)
+                .single();
+            
+            if (dbError) {
+                console.error("Error al cargar datos del usuario:", dbError);
+                await _supabase.auth.signOut();
                 localStorage.removeItem('supabase_user');
                 return;
             }
             
-            console.log("✅ Sesión encontrada en localStorage:", parsed.usuario);
+            if (!userData) {
+                console.warn("Usuario no encontrado en tabla usuarios");
+                await _supabase.auth.signOut();
+                localStorage.removeItem('supabase_user');
+                return;
+            }
             
-            // 🔒 SEGURIDAD: Asegurar que no haya password
-            delete parsed.password;
-            currentUser = parsed;
-            u = parsed; // Sincronizar variable global
+            currentUser = userData;
+            u = userData;
+            localStorage.setItem('supabase_user', JSON.stringify(userData));
             
-            renderDashboard(parsed);
-            console.log("✅ Dashboard renderizado con datos guardados");
+            renderDashboard(userData);
+            console.log("✅ Dashboard renderizado con sesión de Supabase Auth");
             
             await refrescarDatosUsuario();
             console.log("✅ Datos sincronizados con la base de datos");
             
-        } catch (e) {
-            console.error("❌ Error al cargar sesión:", e);
+        } else {
+            console.log("ℹ️ No hay sesión activa - mostrando pantalla de login");
             localStorage.removeItem('supabase_user');
         }
-    } else {
-        console.log("ℹ️ No hay sesión guardada - mostrando pantalla de login");
+    } catch (e) {
+        console.error("❌ Error al verificar sesión:", e);
+        localStorage.removeItem('supabase_user');
     }
 });
 
